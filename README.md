@@ -69,23 +69,6 @@ The Receiver app interface enables you to set up a directory for saving incoming
 
 ## Contributing
 
-Contributions are welcome! If you encounter any issues or have suggestions, feel free to open an [issue](#) or submit a pull request.
+Contributions are welcome! If you encounter any issues or have suggestions, feel free to submit a pull request.
 
 ---
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgments
-
-- Thanks to the community for support and feedback.
-- Built with passion using TCP and Windows Forms.
-
----
-
-## Contact
-
-For any questions or support, feel free to reach out via the [issues page](#).
