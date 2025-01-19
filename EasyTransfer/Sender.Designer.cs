@@ -185,7 +185,7 @@ namespace WinFormsApp1
             Icon = (Icon)resources.GetObject("$this.Icon");
             Margin = new Padding(10);
             MaximizeBox = false;
-            Name = "Transfer Sender";
+            Name = "Sender";
             Padding = new Padding(20);
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Transfer Sender";

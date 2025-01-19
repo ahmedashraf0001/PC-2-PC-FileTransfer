@@ -1,4 +1,5 @@
 using Reciever.Services;
+using Share_App.Error_Handling;
 using System;
 using System.Net;
 using System.Net.Sockets;
@@ -12,7 +13,9 @@ namespace WinFormsApp2
     {
         private string savepath;
         private ReceiverFileTransferService service;
+        private ExceptionHelper ExceptionHelper;
         private bool isRunning = true;
+        
         Form main;
 
         private readonly Color enabledPrimaryColor = Color.FromArgb(50, 50, 50);
@@ -90,6 +93,8 @@ namespace WinFormsApp2
                 var speed = new Progress<string>(speed => UpdateSpeed(speed));
                 var filetransfared = new Progress<string>(file => fileProgressLabel.Text = file);
 
+                ExceptionHelper = new ExceptionHelper();
+
                 return new ReceiverFileTransferService(this,SaveFile, 8080, 8081, status, progress, visible, speed, filetransfared);
 
         }
@@ -136,20 +141,13 @@ namespace WinFormsApp2
                     
                 }
             }
-            catch (OperationCanceledException)
-            {
-
-            }
             catch (Exception ex)
             {
-                MessageBox.Show("An unexpected error occurred while attempting to send the file. Please check your inputs and try again.",
-                                "Error Sending File",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                ExceptionHelper.handleException(ex, "main receiver ");
             }
             finally
             {
-                if (service.Read_isCanceled())
+                if (service.Configurations.ReadTransferState(isCancelled: true))
                 {
                     Status.Text = "Status: Not Connected!";
                     progressBar.Visible = false;

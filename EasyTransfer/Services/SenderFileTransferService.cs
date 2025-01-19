@@ -1,174 +1,136 @@
-﻿using System;
-using System.Diagnostics;
-using System.Net.Sockets;
-using System.Security.Cryptography.X509Certificates;
+﻿using System.Net.Sockets;
 using System.Text;
-using System.Windows.Forms;
-using Sender.Services;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-
+using Share_App.Configurations;
+using Share_App.Error_Handling;
+using Share_App.Extensions;
+using Share_App.Main;
 
 namespace Sender.Services
 {
-    public class SenderFileTransferService: IDisposable
+    public class FileTransferSenderService : IDisposable, IFileTransferService
     {
-        string _ip;
-        int dataPort;
-        int controlPort;
-        private const int BufferSize = 1048576;
-
-        long totalFileSize;
-        public string[] _filepath;
-        private bool _disposed = false;
-
-        private CancellationTokenSource Sendtoken;
-        private CancellationTokenSource Canceltoken;
-        private CancellationTokenSource TaskToken;
-
-        NetworkStream Datastream;
-        NetworkStream Controlstream;  
-        
-        public volatile bool _isPaused;
-        public volatile bool _isfinished;
-        public volatile bool _isCancelled;
-        private readonly object _lock = new object();
-
-        private TcpClient _dataClient;
-        private TcpClient _controlClient;
-
-
-        IProgress<int> progress;
-        IProgress<bool> visible;
-        IProgress<String> status;
-        IProgress<string> speed;
-        IProgress<string> filetransfared;
-
-        public SenderFileTransferService(string[] filePath, string ip, int _dataport, int _Controlport,
-            IProgress<int> _progress, IProgress<bool> _visible, IProgress<String> _status,
-            IProgress<string> _speed, IProgress<string> _filetransfared)
+        SenderConfigurations Configurations;
+        ExceptionHelper ExceptionHelper;
+        public FileTransferSenderService(string[] filePath, string ip, int _dataport, int _Controlport,
+                                         IProgress<int> _progress, IProgress<bool> _visible, IProgress<String> _status,
+                                         IProgress<string> _speed, IProgress<string> _filetransfared)
         {
-            progress = _progress;
-            status = _status;
-            visible = _visible;
-            speed = _speed;
-            filetransfared = _filetransfared;
-            dataPort = _dataport;
-            controlPort = _Controlport;
-
-            Sendtoken = new CancellationTokenSource();
-            Canceltoken = new CancellationTokenSource();
-            TaskToken = new CancellationTokenSource();
-
-            _ip = ip;
-            _filepath = filePath;
+            Configurations = new SenderConfigurations(filePath, ip, _dataport, _Controlport, _progress,
+                                                      _visible, _status, _speed, _filetransfared);
+            ExceptionHelper = new ExceptionHelper();
         }
 
-        public void Update_isPaused(bool value)
-        {
-            lock (_lock)
-            {
-                _isPaused = value;
-            }
-        }
-
-        public bool Read_isPaused()
-        {
-            lock (_lock)
-            {
-                return _isPaused;
-            }
-        }
-        public void Update_isCanceled(bool value)
-        {
-            lock (_lock)
-            {
-                _isCancelled = value;
-            }
-        }
-        public bool Read_isFinished()
-        {
-            lock (_lock)
-            {
-                return _isfinished;
-            }
-        }
-        public void Update_isFinished(bool value)
-        {
-            lock (_lock)
-            {
-                _isfinished = value;
-            }
-        }
-
-        public bool Read_isCanceled()
-        {
-            lock (_lock)
-            {
-                return _isCancelled;
-            }
-        }
-
-        private string FileInfo(string _filepath)
+        private string CreateFileMetadata(string _filepath)
         {
             string filename = Path.GetFileName(_filepath);
             string filetype = Path.GetExtension(_filepath).ToLower();
-            string filesize = totalFileSize.ToString();
+            string filesize = Configurations.totalFileSize.ToString();
             string delimiter = "|";
             string message = filename + delimiter + filesize + delimiter + filetype + delimiter;
             return message;
         }
-        private async Task SendMessage(NetworkStream stream, string message)
+
+        private async Task SendNetworkMessage(NetworkStream stream, string message)
         {
             byte[] messageBuffer = Encoding.UTF8.GetBytes(message);
             if (stream.CanWrite)
             {
-                await stream.WriteAsync(messageBuffer, 0, messageBuffer.Length);
+                await stream.WriteAsync(messageBuffer, 0, messageBuffer.Length).ConfigureAwait(false);
             }
         }
-        private async Task SendControlMessage(string message)
-        {
-            if (_controlClient != null && _controlClient.Connected)
-            {
-                StreamWriter writer = new StreamWriter(Controlstream);
 
-                await writer.WriteLineAsync(message);
-                await writer.FlushAsync();
+        private async Task InitializeNetworkConnections()
+        {
+            if (Configurations._dataClient != null)
+            {
+                Configurations._dataClient.Close();
+                Configurations._dataClient.Dispose();
+
+                Configurations._dataClient = new TcpClient();
+            }
+            if (Configurations._dataClient == null)
+            {
+                Configurations._dataClient = new TcpClient();
+            }
+            if (Configurations._controlClient != null)
+            {
+                Configurations._controlClient.Close();
+                Configurations._controlClient.Dispose();
+
+                Configurations._controlClient = new TcpClient();
+            }
+            if (Configurations._controlClient == null)
+            {
+                Configurations._controlClient = new TcpClient();
+            }
+
+            TransferSpeedometer.ReportStatus(
+                  "Connecting...",
+                  status: Configurations.status
+              );
+            await Configurations._dataClient.ConnectAsync(Configurations._ip, Configurations.dataPort).ConfigureAwait(false);
+            await Configurations._controlClient.ConnectAsync(Configurations._ip, Configurations.controlPort).ConfigureAwait(false);
+
+            Configurations._dataClient.NoDelay = true;
+            Configurations._controlClient.NoDelay = true;
+
+            Configurations.Datastream = Configurations._dataClient.GetStream();
+            Configurations.Controlstream = Configurations._controlClient.GetStream();
+
+            Configurations._dataClient.SendBufferSize = Configurations.BufferSize;
+        }
+
+        public async Task Start()
+        {
+            CleanupResources();
+
+            if ((Configurations._dataClient == null || Configurations._controlClient == null) ||
+                !(Configurations._dataClient.Connected && Configurations._controlClient.Connected))
+            {
+                await InitializeNetworkConnections().ConfigureAwait(false);
+            }
+
+            _ = Task.Run(() => MonitorControlMessages()).ConfigureAwait(false);
+
+            await InitiateDataTransfer().ConfigureAwait(false);
+        }
+
+        private async Task SendTransferControlMessage(TransferControlMessage message)
+        {
+            if (Configurations._controlClient != null && Configurations._controlClient.Connected)
+            {
+                StreamWriter writer = new StreamWriter(Configurations.Controlstream);
+
+                await writer.WriteLineAsync(message.ToMessageString()).ConfigureAwait(false);
+                await writer.FlushAsync().ConfigureAwait(false);
             }
             else
             {
                 throw new SocketException();
             }
-        }
-        public async Task Start()
-        {
-            Cleanup();
-           
-            if ((_dataClient == null || _controlClient == null) || !(_dataClient.Connected && _controlClient.Connected))
+
+            if (message == TransferControlMessage.PauseTransfer)
             {
-                await EstablishConnections();
+                await Task.Delay(100);
+                Configurations.UpdateTransferState(isPaused: true);
             }
-
-            _ = Task.Run(() => ProcessControlMessages());
-
-            await handleDataTransfer();
+            if (message == TransferControlMessage.CancelTransfer)
+            {
+                Configurations.UpdateTransferState(isCancelled: true);
+                Configurations.Sendtoken.Cancel();
+                Configurations.Canceltoken.Cancel();
+            }
         }
+
         public async Task Resume()
         {
             try
             {
-               await SendControlMessage("RESUME_TRANSFER");
+                await SendTransferControlMessage(TransferControlMessage.ResumeTransfer).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                ChangeStatus(
-                   "Connection Error",
-                   "The client is not connected. Please check the connection and try again.",
-                   status
-               );
-                MessageBox.Show("The connection to the server is not active. Please ensure the connection is established.",
-                                    "Connection Issue",
-                                    MessageBoxButtons.OK,
-                                    MessageBoxIcon.Warning);
+                ExceptionHelper.handleException(ex, "Sender ");
             }
         }
 
@@ -176,16 +138,11 @@ namespace Sender.Services
         {
             try
             {
-                await SendControlMessage("PAUSE_TRANSFER");
-                await Task.Delay(100);
-                Update_isPaused(true);
+                await SendTransferControlMessage(TransferControlMessage.PauseTransfer).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("An error occurred while trying to pause the transfer. Please try again later.",
-                                "Pause Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                ExceptionHelper.handleException(ex, "Sender ");
             }
         }
 
@@ -193,133 +150,64 @@ namespace Sender.Services
         {
             try
             {
-                await SendControlMessage("CANCEL_TRANSFER");
-                Canceltoken.Cancel();
-                Sendtoken.Cancel();
+                await SendTransferControlMessage(TransferControlMessage.CancelTransfer).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                ChangeStatus(
-                    "Cancel Error",
-                    "An error occurred while canceling the transfer. Details: " + ex.Message,
-                    status
-                );
+                ExceptionHelper.handleException(ex, "Sender ");
             }
         }
-        private void Cleanup()
-        {
-             totalFileSize = 0;
 
-            if (Sendtoken!= null)
-            {
-                Sendtoken.Cancel();
-                Sendtoken.Dispose();
-            }
-            if (Canceltoken != null)
-            {
-                Canceltoken.Cancel();
-                Canceltoken.Dispose();
-            }
-            if (TaskToken != null)
-            {
-                TaskToken.Cancel();
-                TaskToken.Dispose();
-            }
-
-            Sendtoken = new CancellationTokenSource();
-            Canceltoken = new CancellationTokenSource();
-            TaskToken = new CancellationTokenSource();
-
-            Update_isCanceled(false);
-            Update_isFinished(false);
-            Update_isPaused(false);
-        }
-        private async Task EstablishConnections()
-        {
-            if (_dataClient != null)
-            {
-                _dataClient.Close();
-                _dataClient.Dispose();
-
-                _dataClient = new TcpClient();
-            }
-            if (_dataClient == null)
-            {
-                _dataClient = new TcpClient();
-            }
-            if (_controlClient != null)
-            {
-                _controlClient.Close();
-                _controlClient.Dispose();
-
-                _controlClient = new TcpClient();
-            }
-            if (_controlClient == null)
-            {
-                _controlClient = new TcpClient();
-            }
-
-            await _dataClient.ConnectAsync(_ip, dataPort);
-            await _controlClient.ConnectAsync(_ip, controlPort);
-
-            Datastream = _dataClient.GetStream();
-            Controlstream = _controlClient.GetStream();
-            
-            _dataClient.SendBufferSize = BufferSize;
-
-        }
-       
-        public async Task handleDataTransfer()
+        public async Task InitiateDataTransfer()
         {
             try
             {
-                if (_controlClient.Connected && _dataClient.Connected)
+                if (Configurations._controlClient.Connected && Configurations._dataClient.Connected)
                 {
                     string response;
-                    StreamReader reader = new StreamReader(Datastream, encoding: Encoding.UTF8);
-                    StreamWriter writer = new StreamWriter(Datastream);
-                    
-                        await writer.WriteLineAsync("START_TRANSFER");
-                        await writer.FlushAsync();
-                        response = await reader.ReadLineAsync();
+                    StreamReader reader = new StreamReader(Configurations.Datastream, encoding: Encoding.UTF8);
+                    StreamWriter writer = new StreamWriter(Configurations.Datastream);
 
-                        if (response == "ACK_START_TRANSFER")
-                        {
+                    await writer.WriteLineAsync(TransferControlMessage.StartTransfer.ToMessageString()).ConfigureAwait(false);
+                    await writer.FlushAsync().ConfigureAwait(false);
+                    response = await reader.ReadLineAsync().ConfigureAwait(false);
+
+                    if (response == TransferControlMessage.AckStartTransfer.ToMessageString())
+                    {
                         MessageBox.Show("Connected to Receiver!", "Connection", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            await ProcessDataTransfer();
-                        }
+                        await ExecuteDataTransfer();
+                    }
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Something went wrong while starting the file transfer. Please check your connection and try again.",
-                                "File Transfer Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                ExceptionHelper.handleException(ex, "Sender ");
             }
         }
-        private async Task TransferDataInfo(int index)
+
+        private async Task SendFileMetadata(int index)
         {
-            string infoMessage = FileInfo(_filepath[index]);
+            string infoMessage = CreateFileMetadata(Configurations._filepath[index]);
             byte[] typebuffer = Encoding.UTF8.GetBytes(infoMessage);
-            await Datastream.WriteAsync(typebuffer, 0, typebuffer.Length).ConfigureAwait(false);
+            await Configurations.Datastream.WriteAsync(typebuffer, 0, typebuffer.Length).ConfigureAwait(false);
         }
-        private async Task TransferData(int numOfFiles, int index)
+
+        private async Task TransferFileContent(int numOfFiles, int index)
         {
-            progress.Report(0);
+            Configurations.progress.Report(0);
 
-            TransferSpeedometer Speedometer = new TransferSpeedometer(speed,progress);
+            TransferSpeedometer Speedometer = new TransferSpeedometer(Configurations.speed, Configurations.progress);
 
-            using (FileStream fileStream = new FileStream(_filepath[index], FileMode.Open, FileAccess.Read))
+            using (FileStream fileStream = new FileStream(Configurations._filepath[index], FileMode.Open, FileAccess.Read))
             {
                 int read;
                 long bytesSent = 0;
-                Speedometer.Progressinterval = BufferSize;
+                Speedometer.Progressinterval = Configurations.BufferSize;
 
-                ChangeStatus("Sending..", status: status);
-                visible.Report(true);
+                TransferSpeedometer.ReportStatus("Sending..", status: Configurations.status);
+                Configurations.visible.Report(true);
 
-                byte[] buffer = new byte[BufferSize];
+                byte[] buffer = new byte[Configurations.BufferSize];
 
                 while (true)
                 {
@@ -327,20 +215,20 @@ namespace Sender.Services
                     {
                         if (fileStream.Position < fileStream.Length)
                         {
-                            if (Canceltoken.IsCancellationRequested)
+                            if (Configurations.Canceltoken.IsCancellationRequested)
                             {
-                                progress.Report(0);
-                                ChangeStatus("transfer stopped", status: status);
-                                Canceltoken.Dispose();
-                                Canceltoken = new CancellationTokenSource();
+                                Configurations.progress.Report(0);
+                                TransferSpeedometer.ReportStatus("Transfer Stopped", status: Configurations.status);
+                                Configurations.Canceltoken.Dispose();
+                                Configurations.Canceltoken = new CancellationTokenSource();
                                 return;
                             }
-                            if (Sendtoken.IsCancellationRequested)
+                            if (Configurations.Sendtoken.IsCancellationRequested)
                             {
-                                ChangeStatus("transfer paused", status: status);
-                                while (Sendtoken.IsCancellationRequested)
+                                TransferSpeedometer.ReportStatus("Transfer Paused", status: Configurations.status);
+                                while (Configurations.Sendtoken.IsCancellationRequested)
                                 {
-                                    if (!Canceltoken.IsCancellationRequested)
+                                    if (!Configurations.Canceltoken.IsCancellationRequested)
                                     {
                                         await Task.Delay(100);
                                     }
@@ -350,26 +238,26 @@ namespace Sender.Services
                                     }
                                 }
                             }
-                            
-                            read = await fileStream.ReadAsync(buffer, 0, buffer.Length, Sendtoken.Token).ConfigureAwait(false);
+
+                            read = await fileStream.ReadAsync(buffer, 0, buffer.Length, Configurations.Sendtoken.Token).ConfigureAwait(false);
 
                             if (read > 0)
                             {
                                 bytesSent += read;
 
-                                await Speedometer.UpdateSpeedInfo(read);
-                                await Speedometer.UpdateSpeedProgBar(bytesSent, totalFileSize, BufferSize, status);
+                                await Speedometer.UpdateSpeed(read);
+                                await Speedometer.UpdateProgress(bytesSent, Configurations.totalFileSize, Configurations.BufferSize, Configurations.status);
 
-                                if (Datastream.CanWrite)
+                                if (Configurations.Datastream.CanWrite)
                                 {
-                                    await Datastream.WriteAsync(buffer, 0, read, Sendtoken.Token).ConfigureAwait(false);
+                                    await Configurations.Datastream.WriteAsync(buffer, 0, read, Configurations.Sendtoken.Token).ConfigureAwait(false);
                                 }
                             }
                         }
                         else
                         {
-                            Update_isFinished(true);
-                            progress.Report(0);
+                            Configurations.UpdateTransferState(isFinished: true);
+                            Configurations.progress.Report(0);
                             break;
                         }
                     }
@@ -379,259 +267,124 @@ namespace Sender.Services
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("An error occurred during the file transfer process. Please try again or contact support if the problem persists.",
-                                        "File Transfer Error",
-                                        MessageBoxButtons.OK,
-                                        MessageBoxIcon.Error);
+                        ExceptionHelper.handleException(ex, "Sender ");
+                        break;
                     }
-
-
                 }
             }
         }
-        private async Task ProcessDataTransfer()
+
+        private async Task ExecuteDataTransfer()
         {
             try
             {
-                string delimiter = "|";
-                string initMessage = $"{_filepath.Length}{delimiter}";
+                const string delimiter = "|";
+                string initMessage = $"{Configurations._filepath.Length}{delimiter}";
 
-                await SendMessage(Datastream, initMessage).ConfigureAwait(false);
+                await SendNetworkMessage(Configurations.Datastream, initMessage).ConfigureAwait(false);
 
-                for (int i = 0; i < _filepath.Length; i++)
+                for (int i = 0; i < Configurations._filepath.Length; i++)
                 {
-                    Update_isFinished(false);
-                    filetransfared.Report($"{i + 1} Out Of {_filepath.Length}");
-                    totalFileSize = new FileInfo(_filepath[i]).Length;
+                    Configurations.UpdateTransferState(isFinished: false);
+                    Configurations.filetransfared.Report($"{i + 1} Out Of {Configurations._filepath.Length}");
+                    Configurations.totalFileSize = new FileInfo(Configurations._filepath[i]).Length;
 
-                    await TransferDataInfo(i);
-                    await TransferData(_filepath.Length, i);
+                    await SendFileMetadata(i).ConfigureAwait(false); 
+                    await TransferFileContent(Configurations._filepath.Length, i).ConfigureAwait(false);
 
-                    if (Read_isCanceled())
+                    if (Configurations.ReadTransferState(isCancelled: true))
                     {
                         return;
                     }
                     await Task.Delay(100);
                 }
             }
-            catch (SocketException ex)
-            {
-                ChangeStatus(
-                    "Connection Error",
-                    "Network connection error occurred. Please ensure the server is running and reachable. Details: " + ex.Message,
-                    status
-                );
-            }
-            catch (IOException ex) when (ex.Message.Contains("closed"))
-            {
-                ChangeStatus(
-                    "Transfer Cancelled",
-                    "The file transfer was cancelled. Ensure the connection is active to retry.",
-                    status
-                );
-            }
-            catch (IOException ex)
-            {
-                ChangeStatus(
-                    "I/O Error",
-                    "An input/output error occurred during the transfer. Details: " + ex.Message,
-                    status
-                );
-            }
-            catch (OperationCanceledException)
-            {
-                ChangeStatus(
-                    "Transfer Cancelled",
-                    "The file transfer was cancelled by the user or system.",
-                    status
-                );
-            }
             catch (Exception ex)
             {
-                ChangeStatus(
-                    "Unexpected Error",
-                    "An unexpected error occurred during the file transfer. Details: " + ex.Message,
-                    status
-                );
+                ExceptionHelper.handleException(ex, "Sender ");
             }
             finally
             {
-                visible.Report(false);
-                status.Report("Ready for the next transfer!");
+                Configurations.visible.Report(false);
+                Configurations.status.Report("Ready for the next transfer!");
             }
         }
-        private async Task ProcessControlMessages()
+
+        private async Task ProcessControlMessageResponse(TransferControlMessage message, StreamWriter writer)
+        {
+            switch (message)
+            {
+                case TransferControlMessage.AckPauseTransfer:
+                    Configurations.UpdateTransferState(isPaused: true);
+                    await Task.Delay(100);
+                    Configurations.Sendtoken.Cancel();
+                    break;
+
+                case TransferControlMessage.AckResumeTransfer:
+                    Configurations.UpdateTransferState(isPaused: false);
+                    await Task.Delay(100);
+                    Configurations.Sendtoken.Dispose();
+                    Configurations.Sendtoken = new CancellationTokenSource();
+                    break;
+
+                case TransferControlMessage.AckCancelTransfer:
+                    Configurations.UpdateTransferState(isCancelled: true, isPaused: false);
+                    return;
+
+                case TransferControlMessage.CancelTransfer:
+                    await SendTransferControlMessage(message).ConfigureAwait(false);
+                    return;
+            }
+        }
+
+        private async Task MonitorControlMessages()
         {
             try
             {
-                StreamReader reader = new StreamReader(_controlClient.GetStream(), encoding: Encoding.UTF8);
-                StreamWriter writer = new StreamWriter(_controlClient.GetStream());
+                StreamReader reader = new StreamReader(Configurations._controlClient.GetStream(), encoding: Encoding.UTF8);
+                StreamWriter writer = new StreamWriter(Configurations._controlClient.GetStream());
 
-                while (true)
+                while (!Configurations.TaskToken.IsCancellationRequested)
                 {
-                    if (TaskToken.IsCancellationRequested)
-                    {
-                        return;
-                    }
+                    string messageString = await reader.ReadLineAsync(Configurations.TaskToken.Token).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(messageString)) continue;
 
-                    string message = await reader.ReadLineAsync(TaskToken.Token);
-
-                    switch (message)
-                    {
-                        case "ACK_PAUSE_TRANSFER":
-                            Update_isPaused(true);
-                            await Task.Delay(100);
-                            Sendtoken.Cancel();
-                            break;
-
-                        case "ACK_RESUME_TRANSFER":
-                            Update_isPaused(false);
-                            await Task.Delay(100);
-                            Sendtoken.Dispose();
-                            Sendtoken = new CancellationTokenSource();
-                            break;
-
-                        case "ACK_CANCEL_TRANSFER":
-                            Update_isCanceled(true);
-                            return;
-
-                        case "CANCEL_TRANSFER":
-                            await writer.WriteLineAsync("ACK_CANCEL_TRANSFER");
-                            await writer.FlushAsync();
-                            Update_isCanceled(true);
-                            Sendtoken.Cancel();
-                            Canceltoken.Cancel();
-                            return;
-                    }
+                    TransferControlMessage message = TransferControlMessageExtensions.ParseControlMessage(messageString);
+                    await ProcessControlMessageResponse(message, writer).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException)
-            {
-                // Intentionally left blank as cancellation is expected in some cases.
-            }
-            catch (ObjectDisposedException)
-            {
-                MessageBox.Show("The connection was closed unexpectedly. Please check the server status and try again.",
-                                "Connection Closed",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning);
-            }
+            catch (ObjectDisposedException) { }
             catch (Exception ex)
             {
-                MessageBox.Show($"An unexpected error occurred during message processing: {ex.Message}",
-                                "Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                ExceptionHelper.handleException(ex, "Sender ");
             }
         }
-        public static void ChangeStatus(string report = null, string show = null, IProgress<string> status = null)
+
+        private void CleanupResources()
         {
-            if (report != null)
-            {
-                status.Report(report);
-            }
-            if (show != null)
-            {
-                MessageBox.Show(show, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            Configurations.ResetConfigs();
+            Configurations.UpdateTransferState(isPaused: false, isCancelled: false, isFinished: false);
         }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
+
         protected virtual void Dispose(bool disposing)
         {
-            if (_disposed)
+            if (Configurations._disposed)
                 return;
 
-            if (disposing)
-            {
-                TaskToken?.Cancel();
-                TaskToken?.Dispose();
+            Configurations.Dispose(disposing);
 
-                Canceltoken?.Cancel();
-                Canceltoken?.Dispose();
-
-                Sendtoken?.Cancel();
-                Sendtoken?.Dispose();
-
-                if (_dataClient != null && _dataClient.Connected)
-                {
-                    try
-                    {
-                        _dataClient.GetStream()?.Close();
-                    }
-                    catch {  }
-
-                    _dataClient.Close();
-                    _dataClient.Dispose();
-                }
-
-                if (_controlClient != null && _controlClient.Connected )
-                {
-                    try
-                    {
-                        _controlClient.GetStream()?.Close();
-                    }
-                    catch {  }
-
-                    _controlClient.Close();
-                    _controlClient.Dispose();
-                }
-            }
-
-
-            _disposed = true;
+            Configurations._disposed = true;
         }
-        ~SenderFileTransferService()
+
+        ~FileTransferSenderService()
         {
             Dispose(false);
         }
-    }
-
-}
-
-public class TransferSpeedometer : IDisposable
-{
-    private readonly IProgress<string> ProgressInfo;
-    private readonly IProgress<int> progressBar;
-
-    Stopwatch stopwatch;
-    long intervalReceived;
-    public long Progressinterval {  get; set; }
-    public TransferSpeedometer(IProgress<string> _ProgressInfo, IProgress<int> _progressBar)
-    {
-        progressBar = _progressBar;
-        ProgressInfo = _ProgressInfo;
-        intervalReceived = 0;
-        stopwatch = new Stopwatch();
-        stopwatch.Start();
-    }
-    public async Task UpdateSpeedInfo(int bytesReceived)
-    {
-        intervalReceived += bytesReceived;
-
-        if (stopwatch.ElapsedMilliseconds >= 1000)
-        {
-            double speedMbps = (intervalReceived / 1024.0 / 1024.0) / stopwatch.Elapsed.TotalSeconds;
-            ProgressInfo.Report($"{speedMbps:F2} MB/s");
-            stopwatch.Restart();
-            intervalReceived = 0;
-        }
-    }
-    public async Task UpdateSpeedProgBar(long bytesSent, long totalFileSize, long BufferSize, IProgress<String> status)
-    {
-        double percentage = (double)bytesSent / totalFileSize * 100;
-        SenderFileTransferService.ChangeStatus($"{(int)percentage}%", status: status);
-        if (bytesSent >= Progressinterval)
-        {
-            progressBar.Report((int)percentage);
-            Progressinterval += BufferSize;
-        }
-    }
-    public void Dispose()
-    {
-        stopwatch.Stop();
     }
 }

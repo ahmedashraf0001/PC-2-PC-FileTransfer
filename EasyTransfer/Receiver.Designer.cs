@@ -184,7 +184,7 @@
             FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
             MaximizeBox = false;
-            Name = "Transfer Receiver";
+            Name = "Receiver";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Transfer Receiver";
             ResumeLayout(false);

@@ -1,4 +1,5 @@
 ﻿using Sender.Services;
+using Share_App.Error_Handling;
 using System;
 using System.Data;
 using System.IO;
@@ -13,7 +14,8 @@ namespace WinFormsApp1
     public partial class Sender : Form
     {
         private string[] filepath;
-        private SenderFileTransferService service;
+        private FileTransferSenderService service;
+        private ExceptionHelper ExceptionHelper;
         private bool isPaused;
         Form main;
 
@@ -124,7 +126,7 @@ namespace WinFormsApp1
         {
             Speed.Text = $"Speed : {message}";
         }
-        private SenderFileTransferService InitializeServiceObject(string[] _filepath)
+        private FileTransferSenderService InitializeServiceObject(string[] _filepath)
         {
 
                 var progress = new Progress<int>(value => progressBar.Value = value);
@@ -133,7 +135,9 @@ namespace WinFormsApp1
                 var speed = new Progress<string>(speed => UpdateSpeed(speed));
                 var fileProgress = new Progress<string>(prog => fileProgressLabel.Text = prog);
 
-               return new SenderFileTransferService(_filepath, IpAddressBox.Text, 8080, 8081, progress, visible, status, speed, fileProgress);
+                ExceptionHelper = new ExceptionHelper();
+
+               return new FileTransferSenderService(_filepath, IpAddressBox.Text, 8080, 8081, progress, visible, status, speed, fileProgress);
             
 
         }
@@ -158,30 +162,9 @@ namespace WinFormsApp1
                 }
                
             }
-            catch (OperationCanceledException)
-            {
-
-            }
-            catch (SocketException)
-            {
-                MessageBox.Show("Unable to connect to the server. Please check your internet connection and ensure the server is running.",
-                                "Connection Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning);
-            }
-            catch (IOException)
-            {
-                MessageBox.Show("There was a problem accessing the file. Please ensure the file is not open or in use, and try again.",
-                                "File Access Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning);
-            }
             catch (Exception ex)
             {
-                MessageBox.Show("An unexpected error occurred: " + ex.Message + "\nPlease try again or contact support if the problem persists.",
-                                "Error Sending File",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error);
+                ExceptionHelper.handleException(ex, "main Sender ");
             }
             finally
             {
@@ -191,7 +174,6 @@ namespace WinFormsApp1
 
         private bool ValidateInputs()
         {
-            // Check if the IP address input is valid
             if (string.IsNullOrWhiteSpace(IpAddressBox.Text) ||
                 !IPAddress.TryParse(IpAddressBox.Text, out _))
             {
@@ -202,7 +184,6 @@ namespace WinFormsApp1
                 return false;
             }
 
-            // Check if a file is selected
             if (filepath == null || filepath.Length == 0)
             {
                 MessageBox.Show("No file selected.",
@@ -261,14 +242,14 @@ namespace WinFormsApp1
             }
         }
 
-        private async void SetPause()
+        private void SetPause()
         {
             isPaused = true;
             PauseResume.Text = "Resume";
             UpdateStatus("Paused!");
             
         }
-        private async void SetResume()
+        private void SetResume()
         {
             isPaused = false;
             PauseResume.Text = "Pause";
