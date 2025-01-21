@@ -56,7 +56,7 @@ The Receiver app interface enables you to set up a directory for saving incoming
 ## Installation
 
 1. **Download the Application**
-   - [Download the latest release](https://github.com/ahmedashraf0001/file-transfer-tcp/releases/download/v1.0.0/EasyTransfer.msi) from the Releases section.
+   - [Download the latest release](https://github.com/ahmedashraf0001/PC-2-PC-FileTransfer/releases/download/v1.1.0/EasyTransfer.V1.1.0.msi) from the Releases section.
 
 2. **Requirements**
    - Windows 10 or higher.
