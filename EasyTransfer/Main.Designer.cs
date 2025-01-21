@@ -30,6 +30,7 @@
         {
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(EasyTransfer));
             Sender = new Button();
+            //both = new Button();
             reciever = new Button();
             Title = new Label();
             SuspendLayout();
@@ -64,6 +65,21 @@
             reciever.UseVisualStyleBackColor = true;
             reciever.Click += Reciever_Click;
             // 
+            // both
+            // 
+            //both.BackColor = Color.FromArgb(50, 50, 50);
+            //both.FlatAppearance.BorderSize = 0;
+            //both.FlatStyle = FlatStyle.Flat;
+            //both.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
+            //both.ForeColor = Color.White;
+            //both.Location = new Point(160, 260);
+            //both.Name = "both";
+            //both.Size = new Size(130, 45);
+            //both.TabIndex = 4;
+            //both.Text = "both";
+            //both.UseVisualStyleBackColor = true;
+            //both.Click += both_Click;
+            // 
             // Title
             // 
             Title.AutoSize = true;
@@ -85,6 +101,7 @@
             Controls.Add(Title);
             Controls.Add(Sender);
             Controls.Add(reciever);
+            //Controls.Add(both);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
             MaximizeBox = false;

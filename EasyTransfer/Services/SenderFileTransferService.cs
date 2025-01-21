@@ -35,7 +35,7 @@ namespace Sender.Services
             byte[] messageBuffer = Encoding.UTF8.GetBytes(message);
             if (stream.CanWrite)
             {
-                await stream.WriteAsync(messageBuffer, 0, messageBuffer.Length).ConfigureAwait(false);
+                await stream.WriteAsync(messageBuffer, 0, messageBuffer.Length);
             }
         }
 
@@ -68,11 +68,8 @@ namespace Sender.Services
                   "Connecting...",
                   status: Configurations.status
               );
-            await Configurations._dataClient.ConnectAsync(Configurations._ip, Configurations.dataPort).ConfigureAwait(false);
-            await Configurations._controlClient.ConnectAsync(Configurations._ip, Configurations.controlPort).ConfigureAwait(false);
-
-            Configurations._dataClient.NoDelay = true;
-            Configurations._controlClient.NoDelay = true;
+            await Configurations._dataClient.ConnectAsync(Configurations._ip, Configurations.dataPort);
+            await Configurations._controlClient.ConnectAsync(Configurations._ip, Configurations.controlPort);
 
             Configurations.Datastream = Configurations._dataClient.GetStream();
             Configurations.Controlstream = Configurations._controlClient.GetStream();
@@ -87,12 +84,12 @@ namespace Sender.Services
             if ((Configurations._dataClient == null || Configurations._controlClient == null) ||
                 !(Configurations._dataClient.Connected && Configurations._controlClient.Connected))
             {
-                await InitializeNetworkConnections().ConfigureAwait(false);
+                await InitializeNetworkConnections();
             }
 
-            _ = Task.Run(() => MonitorControlMessages()).ConfigureAwait(false);
+            _ = Task.Run(() => MonitorControlMessages());
 
-            await InitiateDataTransfer().ConfigureAwait(false);
+            await InitiateDataTransfer();
         }
 
         private async Task SendTransferControlMessage(TransferControlMessage message)
@@ -101,8 +98,8 @@ namespace Sender.Services
             {
                 StreamWriter writer = new StreamWriter(Configurations.Controlstream);
 
-                await writer.WriteLineAsync(message.ToMessageString()).ConfigureAwait(false);
-                await writer.FlushAsync().ConfigureAwait(false);
+                await writer.WriteLineAsync(message.ToMessageString());
+                await writer.FlushAsync();
             }
             else
             {
@@ -126,7 +123,7 @@ namespace Sender.Services
         {
             try
             {
-                await SendTransferControlMessage(TransferControlMessage.ResumeTransfer).ConfigureAwait(false);
+                await SendTransferControlMessage(TransferControlMessage.ResumeTransfer);
             }
             catch (Exception ex)
             {
@@ -138,7 +135,7 @@ namespace Sender.Services
         {
             try
             {
-                await SendTransferControlMessage(TransferControlMessage.PauseTransfer).ConfigureAwait(false);
+                await SendTransferControlMessage(TransferControlMessage.PauseTransfer);
             }
             catch (Exception ex)
             {
@@ -150,7 +147,7 @@ namespace Sender.Services
         {
             try
             {
-                await SendTransferControlMessage(TransferControlMessage.CancelTransfer).ConfigureAwait(false);
+                await SendTransferControlMessage(TransferControlMessage.CancelTransfer);
             }
             catch (Exception ex)
             {
@@ -168,9 +165,9 @@ namespace Sender.Services
                     StreamReader reader = new StreamReader(Configurations.Datastream, encoding: Encoding.UTF8);
                     StreamWriter writer = new StreamWriter(Configurations.Datastream);
 
-                    await writer.WriteLineAsync(TransferControlMessage.StartTransfer.ToMessageString()).ConfigureAwait(false);
-                    await writer.FlushAsync().ConfigureAwait(false);
-                    response = await reader.ReadLineAsync().ConfigureAwait(false);
+                    await writer.WriteLineAsync(TransferControlMessage.StartTransfer.ToMessageString());
+                    await writer.FlushAsync();
+                    response = await reader.ReadLineAsync();
 
                     if (response == TransferControlMessage.AckStartTransfer.ToMessageString())
                     {
@@ -189,7 +186,7 @@ namespace Sender.Services
         {
             string infoMessage = CreateFileMetadata(Configurations._filepath[index]);
             byte[] typebuffer = Encoding.UTF8.GetBytes(infoMessage);
-            await Configurations.Datastream.WriteAsync(typebuffer, 0, typebuffer.Length).ConfigureAwait(false);
+            await Configurations.Datastream.WriteAsync(typebuffer, 0, typebuffer.Length);
         }
 
         private async Task TransferFileContent(int numOfFiles, int index)
@@ -208,6 +205,7 @@ namespace Sender.Services
                 Configurations.visible.Report(true);
 
                 byte[] buffer = new byte[Configurations.BufferSize];
+                const string EndOfFileMarker = "<EOF>";
 
                 while (true)
                 {
@@ -230,7 +228,7 @@ namespace Sender.Services
                                 {
                                     if (!Configurations.Canceltoken.IsCancellationRequested)
                                     {
-                                        await Task.Delay(100);
+                                        await Task.Delay(50);
                                     }
                                     else
                                     {
@@ -239,7 +237,7 @@ namespace Sender.Services
                                 }
                             }
 
-                            read = await fileStream.ReadAsync(buffer, 0, buffer.Length, Configurations.Sendtoken.Token).ConfigureAwait(false);
+                            read = await fileStream.ReadAsync(buffer, 0, buffer.Length, Configurations.Sendtoken.Token);
 
                             if (read > 0)
                             {
@@ -250,12 +248,16 @@ namespace Sender.Services
 
                                 if (Configurations.Datastream.CanWrite)
                                 {
-                                    await Configurations.Datastream.WriteAsync(buffer, 0, read, Configurations.Sendtoken.Token).ConfigureAwait(false);
+                                    await Configurations.Datastream.WriteAsync(buffer, 0, read, Configurations.Sendtoken.Token);
                                 }
                             }
                         }
                         else
                         {
+                            byte[] eofMarker = Encoding.UTF8.GetBytes(EndOfFileMarker);
+                            await Configurations.Datastream.WriteAsync(eofMarker, 0, eofMarker.Length);
+                            await Configurations.Datastream.FlushAsync();
+
                             Configurations.UpdateTransferState(isFinished: true);
                             Configurations.progress.Report(0);
                             break;
@@ -281,7 +283,7 @@ namespace Sender.Services
                 const string delimiter = "|";
                 string initMessage = $"{Configurations._filepath.Length}{delimiter}";
 
-                await SendNetworkMessage(Configurations.Datastream, initMessage).ConfigureAwait(false);
+                await SendNetworkMessage(Configurations.Datastream, initMessage);
 
                 for (int i = 0; i < Configurations._filepath.Length; i++)
                 {
@@ -289,14 +291,16 @@ namespace Sender.Services
                     Configurations.filetransfared.Report($"{i + 1} Out Of {Configurations._filepath.Length}");
                     Configurations.totalFileSize = new FileInfo(Configurations._filepath[i]).Length;
 
-                    await SendFileMetadata(i).ConfigureAwait(false); 
-                    await TransferFileContent(Configurations._filepath.Length, i).ConfigureAwait(false);
+                    await SendFileMetadata(i); 
+                    await TransferFileContent(Configurations._filepath.Length, i);
 
                     if (Configurations.ReadTransferState(isCancelled: true))
                     {
                         return;
                     }
-                    await Task.Delay(100);
+                    TransferSpeedometer.ReportStatus("Preparing...", status: Configurations.status);
+                    Configurations.progress.Report(100);
+                    await Task.Delay(1500);
                 }
             }
             catch (Exception ex)
@@ -332,7 +336,7 @@ namespace Sender.Services
                     return;
 
                 case TransferControlMessage.CancelTransfer:
-                    await SendTransferControlMessage(message).ConfigureAwait(false);
+                    await SendTransferControlMessage(message);
                     return;
             }
         }
@@ -346,15 +350,15 @@ namespace Sender.Services
 
                 while (!Configurations.TaskToken.IsCancellationRequested)
                 {
-                    string messageString = await reader.ReadLineAsync(Configurations.TaskToken.Token).ConfigureAwait(false);
+                    string messageString = await reader.ReadLineAsync(Configurations.TaskToken.Token);
                     if (string.IsNullOrEmpty(messageString)) continue;
 
                     TransferControlMessage message = TransferControlMessageExtensions.ParseControlMessage(messageString);
-                    await ProcessControlMessageResponse(message, writer).ConfigureAwait(false);
+                    await ProcessControlMessageResponse(message, writer);
                 }
             }
             catch (ObjectDisposedException) { }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not System.IO.IOException)
             {
                 ExceptionHelper.handleException(ex, "Sender ");
             }

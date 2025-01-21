@@ -6,7 +6,26 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <PackageIcon>file_archive_icon_193973.png</PackageIcon>
+    <Version>1.1.1</Version>
+    <Authors>Ahmed Ashraf</Authors>
+    <Product>EasyTransfer</Product>
+    <RepositoryUrl>https://github.com/ahmedashraf0001/PC-2-PC-FileTransfer</RepositoryUrl>
+    <AssemblyName>EasyTransfer</AssemblyName>
+    <RootNamespace>$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+    <ApplicationIcon>file_archive_icon_193973.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="file_archive_icon_193973.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="file_archive_icon_193973.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
 
 
 </Project>

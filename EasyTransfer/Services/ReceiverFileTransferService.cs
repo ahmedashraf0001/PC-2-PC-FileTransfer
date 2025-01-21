@@ -68,11 +68,8 @@ namespace Reciever.Services
                 Configurations._controlClient.Dispose();
             }
 
-            Configurations._dataClient = await Configurations._dataListener.AcceptTcpClientAsync(Configurations._listenerCancellationTokenSource.Token).ConfigureAwait(false);
-            Configurations._controlClient = await Configurations._controlListener.AcceptTcpClientAsync(Configurations._listenerCancellationTokenSource.Token).ConfigureAwait(false);
-
-            Configurations._dataClient.NoDelay = true;
-            Configurations._controlClient.NoDelay = true;
+            Configurations._dataClient = await Configurations._dataListener.AcceptTcpClientAsync(Configurations._listenerCancellationTokenSource.Token);
+            Configurations._controlClient = await Configurations._controlListener.AcceptTcpClientAsync(Configurations._listenerCancellationTokenSource.Token);
 
             Configurations._dataClient.ReceiveBufferSize = Configurations.BufferSize;
 
@@ -85,18 +82,18 @@ namespace Reciever.Services
             if ((Configurations._dataClient == null || Configurations._controlClient == null) ||
                 !(Configurations._dataClient.Connected && Configurations._controlClient.Connected))
             {
-                await EstablishConnections().ConfigureAwait(false);
+                await EstablishConnections();
             }
             if (!Configurations._areControlTasksRunning)
             {
                 Configurations._areControlTasksRunning = true;
-                _ = Task.Run(() => ProcessControlMessages()).ConfigureAwait(false);
+                _ = Task.Run(() => ProcessControlMessages());
             }
             if (!Configurations._areDataTransferTasksRunning)
             {
                 Configurations._areDataTransferTasksRunning = true;
 
-                await HandleDataTransferAsync().ConfigureAwait(false);
+                await HandleDataTransferAsync();
             }
         }
      
@@ -113,7 +110,7 @@ namespace Reciever.Services
         {
             try
             {
-                await SendControlMessage(TransferControlMessage.CancelTransfer).ConfigureAwait(false);
+                await SendControlMessage(TransferControlMessage.CancelTransfer);
                 Configurations.Sendtoken.Cancel();
                 Configurations.Canceltoken.Cancel();
 
@@ -132,7 +129,7 @@ namespace Reciever.Services
 
             while (true)
             {
-                int bytesRead = await networkStream.ReadAsync(typeBuffer, 0, typeBuffer.Length).ConfigureAwait(false);
+                int bytesRead = await networkStream.ReadAsync(typeBuffer, 0, typeBuffer.Length);
                 if (bytesRead > 0)
                 {
                     char receivedChar = (char)typeBuffer[0];
@@ -176,7 +173,7 @@ namespace Reciever.Services
 
             while (true)
             {
-                int bytesRead = await networkStream.ReadAsync(typeBuffer, 0, typeBuffer.Length).ConfigureAwait(false);
+                int bytesRead = await networkStream.ReadAsync(typeBuffer, 0, typeBuffer.Length);
                 if (bytesRead > 0)
                 {
                     char receivedChar = (char)typeBuffer[0];
@@ -225,6 +222,10 @@ namespace Reciever.Services
             long received = 0;
             TransferSpeedometer Speedometer = new TransferSpeedometer(Configurations.speed, Configurations.progress);
 
+            const string EndOfFileMarker = "<EOF>";
+            byte[] eofMarker = Encoding.UTF8.GetBytes(EndOfFileMarker);
+            byte[] endBuffer = new byte[eofMarker.Length];
+
             Configurations.progress.Report(0);
             Configurations.visible.Report(true);
 
@@ -235,11 +236,9 @@ namespace Reciever.Services
                     byte[] buffer = new byte[Configurations.BufferSize];
                     while (true)
                     {
-                      
                         try
                         {
-                            if (received < Configurations.filesize)
-                            {
+
                                 if (Configurations.Canceltoken.IsCancellationRequested)
                                 {
                                     Configurations.progress.Report(0);
@@ -255,7 +254,7 @@ namespace Reciever.Services
                                     {
                                         if (!Configurations.Canceltoken.IsCancellationRequested)
                                         {
-                                            await Task.Delay(100);
+                                            await Task.Delay(50);
                                         }
                                         else
                                         {
@@ -263,28 +262,39 @@ namespace Reciever.Services
                                         }
                                     }
                                 }
-                                int read = await networkStream.ReadAsync(buffer, 0, buffer.Length, Configurations.Sendtoken.Token).ConfigureAwait(false);
-                              
+                                int read = await networkStream.ReadAsync(buffer, 0, buffer.Length, Configurations.Sendtoken.Token);
 
-                                received += read;
-                                await fileStream.WriteAsync(buffer, 0, read, Configurations.Sendtoken.Token).ConfigureAwait(false);
-                                
-                                await Speedometer.UpdateSpeed(read);
+                                if (read >= eofMarker.Length)
+                                {
+                                    Buffer.BlockCopy(buffer, read - eofMarker.Length, endBuffer, 0, eofMarker.Length);
+                                    if (Encoding.UTF8.GetString(endBuffer) == EndOfFileMarker)
+                                    {
+                                        read -= eofMarker.Length;
+                                        if (read > 0)
+                                        {
+                                            await fileStream.WriteAsync(buffer, 0, read);
+                                            received += read;
+                                        }
+                                        break;
+                                    }
+                                }
 
-                                await Speedometer.UpdateProgress(received, Configurations.filesize, Configurations.BufferSize, Configurations.status);
-
-                            }
-                            else
-                            {
-                                Configurations.UpdateTransferState(isFinished: true);
-                                Configurations.progress.Report(0);
-                                break;
-                            }
+                                if (read > 0)
+                                {
+                                    received += read;
+                                    await fileStream.WriteAsync(buffer, 0, read);
+                                    await Speedometer.UpdateSpeed(read);
+                                    await Speedometer.UpdateProgress(received, Configurations.filesize, Configurations.BufferSize, Configurations.status);
+                                }
+                                else
+                                {
+                                    break; 
+                                }
                         }
                         catch (OperationCanceledException) {  }
                         catch (Exception ex)
                         {
-                            ExceptionHelper.handleException(ex, "Receiver 1");
+                            ExceptionHelper.handleException(ex, "Receiver ");
                             break;
                         }
                     }
@@ -299,7 +309,7 @@ namespace Reciever.Services
 
                 StartTransferUIState();
 
-                await ReadNumOfFiles(networkStream).ConfigureAwait(false);
+                await ReadNumOfFiles(networkStream);
 
                 for (int i = 0; i < Configurations.numOfFiles; i++)
                 {
@@ -307,19 +317,21 @@ namespace Reciever.Services
                     Configurations.UpdateTransferState(isFinished: false);
                     Configurations.filetransfared.Report($"{i + 1} Out Of {Configurations.numOfFiles}");
 
-                    await ReadDataInfo(networkStream).ConfigureAwait(false);
+                    await ReadDataInfo(networkStream);
 
-                    await TransferData(networkStream).ConfigureAwait(false);
+                    await TransferData(networkStream);
                     if (Configurations.ReadTransferState(isCancelled: true))
                     {
                         return;
                     }
-                    await Task.Delay(100);
+                    TransferSpeedometer.ReportStatus("Preparing...", status: Configurations.status);
+                    Configurations.progress.Report(100);
+                    await Task.Delay(1500);
                 }
             }
             catch (Exception ex)
             {
-                ExceptionHelper.handleException(ex, "Receiver 2");
+                ExceptionHelper.handleException(ex, "Receiver ");
             }
             finally
             {
@@ -327,7 +339,7 @@ namespace Reciever.Services
                 Configurations.visible.Report(false);
                 Configurations.status.Report("Ready for next Transfer!");
                 FinishUIState();
-                await Reset().ConfigureAwait(false);
+                await Reset();
             }
         }
         private void StartTransferUIState()
@@ -391,8 +403,8 @@ namespace Reciever.Services
 
                             if (response == TransferControlMessage.StartTransfer.ToMessageString())
                             {
-                                await writer.WriteLineAsync(TransferControlMessage.AckStartTransfer.ToMessageString()).ConfigureAwait(false);
-                                await writer.FlushAsync().ConfigureAwait(false);
+                                await writer.WriteLineAsync(TransferControlMessage.AckStartTransfer.ToMessageString());
+                                await writer.FlushAsync();
                                 await ProcessDataTransfer(stream);
                             }
                             await Task.Delay(1000);
@@ -403,7 +415,7 @@ namespace Reciever.Services
             }
             catch (Exception ex)
             {
-                ExceptionHelper.handleException(ex, "Receiver 3");
+                ExceptionHelper.handleException(ex, "Receiver ");
             }
         }
         private async Task SendControlMessage(TransferControlMessage message)
@@ -412,8 +424,8 @@ namespace Reciever.Services
             {
                 StreamWriter writer = new StreamWriter(Configurations._controlClient.GetStream());
 
-                await writer.WriteLineAsync(message.ToMessageString()).ConfigureAwait(false);
-                await writer.FlushAsync().ConfigureAwait(false);
+                await writer.WriteLineAsync(message.ToMessageString());
+                await writer.FlushAsync();
             }
             else
             {
@@ -444,15 +456,15 @@ namespace Reciever.Services
             switch (message)
             {
                 case TransferControlMessage.PauseTransfer:
-                    await SendControlMessage(TransferControlMessage.AckPauseTransfer).ConfigureAwait(false);
+                    await SendControlMessage(TransferControlMessage.AckPauseTransfer);
 
                     break;
                 case TransferControlMessage.ResumeTransfer:
-                    await SendControlMessage(TransferControlMessage.AckResumeTransfer).ConfigureAwait(false);
+                    await SendControlMessage(TransferControlMessage.AckResumeTransfer);
 
                     break;
                 case TransferControlMessage.CancelTransfer:
-                    await SendControlMessage(TransferControlMessage.AckCancelTransfer).ConfigureAwait(false);
+                    await SendControlMessage(TransferControlMessage.AckCancelTransfer);
 
                     break;
                 case TransferControlMessage.AckCancelTransfer:
@@ -470,18 +482,18 @@ namespace Reciever.Services
                     StreamWriter writer = new StreamWriter(Configurations._controlClient.GetStream());
                     while (!Configurations.TaskToken.IsCancellationRequested)
                     {
-                        string messageString = await reader.ReadLineAsync(Configurations.TaskToken.Token).ConfigureAwait(false);
+                        string messageString = await reader.ReadLineAsync(Configurations.TaskToken.Token);
                         if (string.IsNullOrEmpty(messageString)) continue;
                        
                         TransferControlMessage message = TransferControlMessageExtensions.ParseControlMessage(messageString);
-                        await HandleControlMessage(message,  writer).ConfigureAwait(false);
+                        await HandleControlMessage(message,  writer);
                     }
                 }
             }
             catch (ObjectDisposedException) { }
             catch (Exception ex)
             {
-                ExceptionHelper.handleException(ex, "Receiver 4");
+                ExceptionHelper.handleException(ex, "Receiver ");
             }
         }
 
@@ -496,11 +508,11 @@ namespace Reciever.Services
 
             Configurations.RebuildConfigs();
 
-            await EstablishConnections().ConfigureAwait(false);
+            await EstablishConnections();
 
-            _ = Task.Run(() => ProcessControlMessages()).ConfigureAwait(false);
+            _ = Task.Run(() => ProcessControlMessages());
 
-            await HandleDataTransferAsync().ConfigureAwait(false);
+            await HandleDataTransferAsync();
         }
         public void Dispose()
         {
