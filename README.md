@@ -66,7 +66,22 @@ The Receiver app interface enables you to set up a directory for saving incoming
    - Extract the downloaded files and run `EasyTransfer.exe` to choose between Sender and Receiver modes.
 
 ---
+## Note: Unblock Files
 
+After downloading or cloning the repository, some files may be blocked by Windows because they were downloaded from the internet. This can prevent you from being able to compile the code on your Windows machine.
+
+To unblock the files, follow these steps:
+1. Right-click the file.
+2. Select **Properties**.
+3. In the **General** tab, check the **Unblock** box at the bottom.
+4. Click **Apply** and **OK**.
+
+Alternatively, you can run the following PowerShell script inside the Source Code to unblock all files:
+
+```powershell
+Get-ChildItem -Recurse -Filter "*.resx" | Unblock-File
+```
+---
 ## Contributing
 
 Contributions are welcome! If you encounter any issues or have suggestions, feel free to submit a pull request.
